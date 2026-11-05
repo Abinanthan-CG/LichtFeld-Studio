@@ -1481,6 +1481,7 @@ if(BUILD_PORTABLE)
             "${CMAKE_BINARY_DIR}/lib"
             "${CMAKE_BINARY_DIR}/external/nvImageCodec"
             "${CUDAToolkit_BIN_DIR}"
+            "${CUDAToolkit_BIN_DIR}/x64"
             "${CUDAToolkit_LIBRARY_DIR}"
             "$<TARGET_FILE_DIR:slang::slang>")
     if(DEFINED VCPKG_TARGET_TRIPLET)
@@ -1695,3 +1696,4 @@ if(BUILD_SPLAT_TRANSFER_TESTS)
         set_tests_properties(x11_drag_contract PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "GDK_BACKEND=x11" TIMEOUT 30)
     endif()
 endif()
+

@@ -1,26 +1,31 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO haasn/libplacebo
-    REF v7.360.1
-    SHA512 209B1713CFF34F06149AF16FB3EA52E3662A566EF5DF6B29811AD295AA8CB6388F827A93FC8E0EED1A72F35B3B3AAE835520C933079E706A51D11136A8128799
+    REF "v${VERSION}"
+    SHA512 875df54b6ad6c2a4fc0fcbfeaeeb9f143c683b516b77248386377759868be5e39d73981ea3c329432650570b55146c929e0839e31d4d38096cffca7f1f3a2162
     HEAD_REF master
 )
 
-# Vendor the pinned shader-generation sources omitted from libplacebo's archive.
-vcpkg_from_github(
-    OUT_SOURCE_PATH JINJA_SOURCE
-    REPO pallets/jinja
-    REF 15206881c006c79667fe5154fe80c01c65410679
-    SHA512 E1082222A4660E60F05E970E7C5B6F2FAB377BA01C273BCB6FE0EAD457EA5D4764C1D95FB3264B6BC371E122D574517AC35B6AE3858B50BC4918ACD08A3F75DE
-    HEAD_REF main
+vcpkg_download_distfile(
+    JINJA_ARCHIVE
+    URLS "https://files.pythonhosted.org/packages/source/J/Jinja2/jinja2-3.1.5.tar.gz"
+    FILENAME "jinja2-3.1.5.tar.gz"
+    SHA512 c9667793d56f6b5536b5ec63ce2f99ff4ee128be410aa6670868f773663ab38c82ab4774cae5d95d85289cb0460f994d5fb556814b7e8c1fa3179fe9db85b2e5
 )
-vcpkg_from_github(
-    OUT_SOURCE_PATH MARKUPSAFE_SOURCE
-    REPO pallets/markupsafe
-    REF 297fc8e356e6836a62087949245d09a28e9f1b13
-    SHA512 8E16146B42DE9F0939B706C1652D4C5FE8E67E1F7E0C5A0E37D698D9AB10DCADF3E26B12E4BE2B37209C33703996351B02C54AF7CEB2D9EAF24AEDE7CECDF648
-    HEAD_REF main
+vcpkg_extract_source_archive(JINJA_SOURCE ARCHIVE "${JINJA_ARCHIVE}")
+
+vcpkg_download_distfile(
+    MARKUPSAFE_ARCHIVE
+    URLS "https://files.pythonhosted.org/packages/source/M/MarkupSafe/MarkupSafe-2.1.5.tar.gz"
+    FILENAME "MarkupSafe-2.1.5.tar.gz"
+    SHA512 d044e5cc5b95a4623ee5723b20757f5c531d279cf296c09b6348633e722514ab3b6ce17bb33044a2c0bc376a928929e735e5d168581023fc0952d4392762283e
 )
+vcpkg_extract_source_archive(MARKUPSAFE_SOURCE ARCHIVE "${MARKUPSAFE_ARCHIVE}")
+
 file(COPY "${JINJA_SOURCE}/src/"
      DESTINATION "${SOURCE_PATH}/3rdparty/jinja/src")
 file(COPY "${MARKUPSAFE_SOURCE}/src/"
@@ -29,7 +34,10 @@ file(COPY "${MARKUPSAFE_SOURCE}/src/"
 # libplacebo uses GNU C extensions; use clang-cl only for this Windows port.
 if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
     set(_lfs_clang_cl "")
-    find_program(_lfs_clang_cl_found NAMES clang-cl clang-cl.exe)
+    find_program(_lfs_clang_cl_found NAMES clang-cl clang-cl.exe HINTS "C:/Users/dabin/development/llvm/bin" "$ENV{LLVM_ROOT}/bin")
+    if(NOT _lfs_clang_cl_found AND EXISTS "C:/Users/dabin/development/llvm/bin/clang-cl.exe")
+        set(_lfs_clang_cl_found "C:/Users/dabin/development/llvm/bin/clang-cl.exe")
+    endif()
     if(_lfs_clang_cl_found)
         set(_lfs_clang_cl "${_lfs_clang_cl_found}")
     endif()
@@ -40,78 +48,79 @@ if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
             set(_lfs_clang_cl "${_lfs_clang_cl_candidate}")
         endif()
     endif()
-    if(NOT _lfs_clang_cl AND DEFINED ENV{VSINSTALLDIR} AND NOT "$ENV{VSINSTALLDIR}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{VSINSTALLDIR}" _lfs_vs_installation)
-        set(_lfs_clang_cl_candidate "${_lfs_vs_installation}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
-        if(EXISTS "${_lfs_clang_cl_candidate}")
-            set(_lfs_clang_cl "${_lfs_clang_cl_candidate}")
+    if(NOT _lfs_clang_cl)
+        set(_lfs_vs_where "$ENV{ProgramFiles\(x86\)}/Microsoft Visual Studio/Installer/vswhere.exe")
+        if(EXISTS "${_lfs_vs_where}")
+            vcpkg_execute_required_process(
+                COMMAND "${_lfs_vs_where}" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath
+                WORKING_DIRECTORY "${CURRENT_BUILDTREES_DIR}"
+                LOGNAME "vswhere-clang-cl"
+                OUTPUT_VARIABLE _lfs_vs_latest
+            )
+            string(STRIP "${_lfs_vs_latest}" _lfs_vs_latest)
+            set(_lfs_clang_cl_candidate "${_lfs_vs_latest}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
+            if(EXISTS "${_lfs_clang_cl_candidate}")
+                set(_lfs_clang_cl "${_lfs_clang_cl_candidate}")
+            endif()
         endif()
     endif()
+
     if(NOT _lfs_clang_cl)
         message(FATAL_ERROR
-            "libplacebo on Windows requires clang-cl from Visual Studio. Install the "
-            "'C++ Clang Compiler for Windows' individual component and ensure "
-            "clang-cl is on PATH, or run CMake from the x64 Native Tools Command "
-            "Prompt so VSINSTALLDIR/VCINSTALLDIR can locate it.")
+            "Building libplacebo on Windows requires clang-cl (LLVM C/C++ compiler). "
+            "Please install LLVM or the 'C++ Clang Compiler for Windows' component in Visual Studio.")
     endif()
 
     # Override only Meson's C/C++ compiler; keep vcpkg's MSVC settings.
+    get_filename_component(_lfs_clang_dir "${_lfs_clang_cl}" DIRECTORY)
+    find_program(_lfs_lld_link NAMES lld-link lld-link.exe HINTS "${_lfs_clang_dir}" "C:/Users/dabin/development/llvm/bin" "C:/Users/dabin/development/tools/lld-bin")
+    if(_lfs_lld_link)
+        set(_lfs_lld_dir "${CURRENT_BUILDTREES_DIR}/lld-bin")
+        file(MAKE_DIRECTORY "${_lfs_lld_dir}")
+        if(NOT EXISTS "${_lfs_lld_dir}/lld-link.exe")
+            file(CREATE_LINK "${_lfs_lld_link}" "${_lfs_lld_dir}/lld-link.exe" COPY_ON_ERROR)
+        endif()
+        vcpkg_add_to_path(PREPEND "${_lfs_lld_dir}")
+    endif()
+
     set(_lfs_clang_native_file "${CURRENT_BUILDTREES_DIR}/clang-cl-${TARGET_TRIPLET}.ini")
-    file(WRITE "${_lfs_clang_native_file}"
+    set(_lfs_native_content
         "[binaries]\n"
         "c = ['${_lfs_clang_cl}']\n"
         "cpp = ['${_lfs_clang_cl}']\n")
+    if(_lfs_lld_link)
+        string(APPEND _lfs_native_content
+            "c_ld = ['${_lfs_lld_link}']\n"
+            "cpp_ld = ['${_lfs_lld_link}']\n")
+    endif()
+    file(WRITE "${_lfs_clang_native_file}" "${_lfs_native_content}")
     set(VCPKG_MESON_NATIVE_FILE_DEBUG "${_lfs_clang_native_file}")
     set(VCPKG_MESON_NATIVE_FILE_RELEASE "${_lfs_clang_native_file}")
 endif()
 
-# Use the installed host vcpkg-tool-meson port config (not overlay files).
-include("${CURRENT_HOST_INSTALLED_DIR}/share/vcpkg-tool-meson/vcpkg-port-config.cmake")
-
-# Build only the Vulkan renderer and built-in Dolby Vision support used here.
-set(LIBPLACEBO_MESON_OPTIONS
-    -Dvulkan=enabled
-    # Required when pl_vulkan resolves Vulkan entry points internally.
-    -Dvk-proc-addr=enabled
-    -Dshaderc=enabled
-    -Dglslang=disabled
-    -Ddovi=enabled
-    -Dlibdovi=disabled
-    -Dopengl=disabled
-    -Dd3d11=disabled
-    -Dlcms=disabled
-    -Dxxhash=disabled
-    # Avoid Requires: libunwind in the generated .pc (undeclared system dep).
-    -Dunwind=disabled
-    -Ddemos=false
-    -Dtests=false
-    -Dbench=false
-    -Dfuzz=false
+vcpkg_check_features(OUT_FEATURE_FLAGS FEATURE_FLAGS
+    FEATURES
+        d3d11       d3d11
+        glslang     glslang
+        lcms        lcms2
+        shaderc     shaderc
+        vulkan      vulkan
+        xxhash      xxhash
 )
-
-set(_lfs_vulkan_registry "${CURRENT_INSTALLED_DIR}/share/vulkan/registry/vk.xml")
-if(NOT EXISTS "${_lfs_vulkan_registry}")
-    message(FATAL_ERROR
-        "libplacebo requires the Vulkan registry at '${_lfs_vulkan_registry}', "
-        "but it was not found. Ensure the 'vulkan' dependency installed the "
-        "registry before building this port.")
-endif()
-list(APPEND LIBPLACEBO_MESON_OPTIONS
-    "-Dvulkan-registry=${_lfs_vulkan_registry}")
 
 vcpkg_configure_meson(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
-        ${LIBPLACEBO_MESON_OPTIONS}
+        ${FEATURE_FLAGS}
+        -Ddemos=false
+        -Dtests=false
+        -Dbench=false
+        -Dfuzz=false
 )
 
 vcpkg_install_meson()
 vcpkg_copy_pdbs()
 vcpkg_fixup_pkgconfig()
 
-file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include"
-                    "${CURRENT_PACKAGES_DIR}/debug/share")
-
-file(INSTALL "${CMAKE_CURRENT_LIST_DIR}/usage"
-     DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

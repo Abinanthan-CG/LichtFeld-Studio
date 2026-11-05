@@ -88,3 +88,10 @@ generatedSchema.usda
 # only creates merge-conflict churn).
 src/rendering/rasterizer/vulkan/shader/generated/*.spv
 src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
+
+
+# Staged portable distributions and installer output
+dist/
+installer_output/
+run_build_and_package.bat
+run_configure.bat

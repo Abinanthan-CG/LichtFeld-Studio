@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Build & Release Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish as a downloadable GitHub Release'
+        required: false
+        type: boolean
+        default: true
+      release_title:
+        description: 'Custom Release Title (optional)'
+        required: false
+        type: string
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  BUILD_DIR: b
+  VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
+  VCPKG_BUILD_TYPE: release
+  CUDA_PATH: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
+
+jobs:
+  build-installer:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Ensure Inno Setup is installed
+        shell: pwsh
+        run: |
+          if (-not (Get-Command "iscc.exe" -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Inno Setup via Chocolatey..."
+            choco install innosetup --no-progress -y
+            echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            Write-Host "Inno Setup is already present in PATH."
+          }
+
+      - name: Install CUDA 12.8
+        shell: pwsh
+        run: |
+          cd ..
+          Write-Host "Downloading CUDA 12.8 network installer..."
+          Invoke-WebRequest https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_571.96_windows.exe -OutFile cuda.exe -Verbose
+          Write-Host "Installing CUDA toolkit components silently..."
+          Start-Process -FilePath .\cuda.exe -ArgumentList "-y -s -accepteula -toolkit -override -noDisplayDriver" -Wait
+          Remove-Item .\cuda.exe -Force
+
+      - name: Configure CUDA environment
+        shell: pwsh
+        run: |
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CUDA_PATH_V12_8=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Normalize vcpkg path
+        shell: pwsh
+        run: |
+          $vcpkgFull = [System.IO.Path]::GetFullPath($env:VCPKG_ROOT)
+          "VCPKG_ROOT=$vcpkgFull" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Cache vcpkg tool
+        id: cache-vcpkg-tool
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-tool-${{ runner.os }}-2026-10-22
+
+      - name: Setup vcpkg if cache miss
+        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cd ..
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}/vcpkg_installed
+          key: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-
+
+      - name: Configure project with CMake
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF
+
+      - name: Compile Release Binaries
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
+
+      - name: Install portable payload into dist/
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --install %BUILD_DIR% --prefix dist
+
+      - name: Package Inno Setup Installer (.exe) and Portable Archive (.zip)
+        id: package
+        shell: pwsh
+        run: |
+          $shortSha = (git rev-parse --short HEAD).Trim()
+          $dateStamp = Get-Date -Format "yyyyMMdd"
+          
+          # Determine version label
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            $version = $env:GITHUB_REF.Substring(11)
+          } else {
+            $version = "0.5.5-$dateStamp+$shortSha"
+          }
+
+          if (-not (Test-Path "installer_output")) {
+            New-Item -ItemType Directory -Path "installer_output" | Out-Null
+          }
+
+          Write-Host "Compiling Inno Setup Release Installer for version $version..."
+          & iscc.exe /DSourceRootDir=. /DMyAppVersion="$version" lichtfeld_installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed!"
+          }
+
+          $zipName = "installer_output\LichtFeld-Studio-windows-v$version-portable.zip"
+          Write-Host "Creating portable zip archive: $zipName..."
+          Compress-Archive -Path dist\* -DestinationPath $zipName
+
+          "package_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Get-ChildItem -Path installer_output
+
+      - name: Upload Installer as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LichtFeld-Studio-Windows-Installer
+          path: installer_output/*
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: ${{ github.event_name == 'push' || github.event.inputs.create_release != false }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.package.outputs.package_version) }}
+          name: ${{ github.event.inputs.release_title != '' && github.event.inputs.release_title || format('LichtFeld Studio Windows v{0}', steps.package.outputs.package_version) }}
+          draft: false
+          prerelease: false
+          files: |
+            installer_output/*.exe
+            installer_output/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
