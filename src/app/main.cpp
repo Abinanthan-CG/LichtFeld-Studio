@@ -48,31 +48,10 @@ extern "C" {
     __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
-static void ensureVulkanNvidiaDiscovery() {
-    if (std::getenv("VK_ICD_FILENAMES") || std::getenv("VK_DRIVER_FILES")) {
-        return;
-    }
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path driver_store = "C:\\Windows\\System32\\DriverStore\\FileRepository";
-    if (fs::exists(driver_store, ec)) {
-        for (const auto& entry : fs::directory_iterator(driver_store, ec)) {
-            if (entry.is_directory(ec)) {
-                const auto manifest = entry.path() / "nv-vk64.json";
-                if (fs::exists(manifest, ec)) {
-                    _putenv_s("VK_ICD_FILENAMES", manifest.string().c_str());
-                    _putenv_s("VK_DRIVER_FILES", manifest.string().c_str());
-                    break;
-                }
-            }
-        }
-    }
-}
 #endif
 
     void applyCudaContextTuning() {
 #ifdef _WIN32
-        ensureVulkanNvidiaDiscovery();
         _putenv_s("CUDA_MODULE_LOADING", "LAZY");
 #else
         setenv("CUDA_MODULE_LOADING", "LAZY", /*overwrite=*/0);
